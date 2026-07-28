@@ -10,11 +10,10 @@ let waitingQueue = [];
 
 io.on('connection', (socket) => {
   let userProfile = null;
-  let currentRoomId = null;
 
-  // 1. プロフィールを受け取って待機列に追加
+  // 1. マッチング検索
   socket.on('find-match', (profile) => {
-    userProfile = profile;
+    socket.userProfile = profile;
 
     if (waitingQueue.length === 0) {
       waitingQueue.push(socket);
@@ -29,28 +28,29 @@ io.on('connection', (socket) => {
       socket.join(roomId);
       partner.join(roomId);
 
-      // お互いに相手のプロフィールを送信
+      // 互いに相手のプロフィールを通知して選択画面を出す
       socket.emit('match-found', { roomId, isInitiator: false, partnerProfile: partner.userProfile });
-      partner.emit('match-found', { roomId, isInitiator: true, partnerProfile: userProfile });
+      partner.emit('match-found', { roomId, isInitiator: true, partnerProfile: socket.userProfile });
     }
   });
 
-  // 2. マッチング承認／キャンセルの同期
+  // 2. 「マッチング（承認）」を押したとき
   socket.on('accept-match', (roomId) => {
     socket.to(roomId).emit('partner-accepted');
   });
 
+  // 3. 「キャンセル（拒否）」を押したとき
   socket.on('cancel-match', (roomId) => {
     socket.to(roomId).emit('partner-canceled');
     socket.leave(roomId);
   });
 
-  // 3. WebRTCシグナリング
+  // 4. WebRTC シグナリング
   socket.on('signal', (data) => {
     socket.to(data.roomId).emit('signal', data.signal);
   });
 
-  // 4. 切断処理
+  // 5. 切断処理
   socket.on('disconnect', () => {
     waitingQueue = waitingQueue.filter(s => s.id !== socket.id);
     if (socket.currentRoomId) {
