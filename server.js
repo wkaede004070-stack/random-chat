@@ -4,51 +4,57 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
-// モードごとの待機キュー
-const waitingQueues = {
-  text: [],
-  audio: [],
-  video: []
-};
+let waitingQueue = [];
 
 io.on('connection', (socket) => {
-  let currentMode = null;
+  let userProfile = null;
+  let currentRoomId = null;
 
-  // 1. マッチング検索の開始
-  socket.on('find-match', (mode) => {
-    currentMode = mode;
-    
-    // 待機列に誰もいなければキューに追加して待機
-    if (waitingQueues[mode].length === 0) {
-      waitingQueues[mode].push(socket);
+  // 1. プロフィールを受け取って待機列に追加
+  socket.on('find-match', (profile) => {
+    userProfile = profile;
+
+    if (waitingQueue.length === 0) {
+      waitingQueue.push(socket);
       socket.emit('status', '相手を探しています...');
     } else {
-      // 待機している人がいればペアリング！
-      const partner = waitingQueues[mode].pop();
+      const partner = waitingQueue.pop();
       const roomId = `room_${socket.id}_${partner.id}`;
+
+      socket.currentRoomId = roomId;
+      partner.currentRoomId = roomId;
 
       socket.join(roomId);
       partner.join(roomId);
 
-      // それぞれに相手を通知（先に待っていた方をオファー側に設定）
-      socket.emit('match-found', { roomId, isInitiator: false });
-      partner.emit('match-found', { roomId, isInitiator: true });
+      // お互いに相手のプロフィールを送信
+      socket.emit('match-found', { roomId, isInitiator: false, partnerProfile: partner.userProfile });
+      partner.emit('match-found', { roomId, isInitiator: true, partnerProfile: userProfile });
     }
   });
 
-  // 2. WebRTCシグナリング（映像・音声・テキストデータの仲介）
+  // 2. マッチング承認／キャンセルの同期
+  socket.on('accept-match', (roomId) => {
+    socket.to(roomId).emit('partner-accepted');
+  });
+
+  socket.on('cancel-match', (roomId) => {
+    socket.to(roomId).emit('partner-canceled');
+    socket.leave(roomId);
+  });
+
+  // 3. WebRTCシグナリング
   socket.on('signal', (data) => {
     socket.to(data.roomId).emit('signal', data.signal);
   });
 
-  // 3. 切断処理
+  // 4. 切断処理
   socket.on('disconnect', () => {
-    if (currentMode && waitingQueues[currentMode]) {
-      waitingQueues[currentMode] = waitingQueues[currentMode].filter(s => s.id !== socket.id);
+    waitingQueue = waitingQueue.filter(s => s.id !== socket.id);
+    if (socket.currentRoomId) {
+      io.to(socket.currentRoomId).emit('partner-canceled');
     }
   });
 });
